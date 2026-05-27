@@ -154,6 +154,104 @@ def ma(data, n):
         return None
     return sum(data[-n:]) / n
 
+def ema_list(data, n):
+    """Return full EMA series."""
+    if len(data) < n:
+        return [None] * len(data)
+    k = 2.0 / (n + 1)
+    result = [None] * (n - 1)
+    val = sum(data[:n]) / n
+    result.append(val)
+    for x in data[n:]:
+        val = (x - val) * k + val
+        result.append(val)
+    return result
+
+def calc_macd(closes):
+    """Return (DIF, DEA, MACD_bar, status_str)."""
+    e12 = ema_list(closes, 12)
+    e26 = ema_list(closes, 26)
+    if not e12 or not e26:
+        return None, None, None, "—"
+
+    difs = []
+    for a, b in zip(e12, e26):
+        if a is not None and b is not None:
+            difs.append(a - b)
+        else:
+            difs.append(None)
+    valid = [x for x in difs if x is not None]
+    if len(valid) < 9:
+        return None, None, None, "—"
+
+    deas = ema_list(valid, 9)
+    if not deas or len(deas) < 2:
+        return None, None, None, "—"
+
+    dif = valid[-1]
+    dea = deas[-1]
+    prev_dif = valid[-2]
+    prev_dea = deas[-2]
+    bar = 2 * (dif - dea)
+
+    if dif > dea:
+        status = "MACD多头" if dif > 0 else "MACD低位金叉"
+    else:
+        status = "MACD空头" if dif < 0 else "MACD高位死叉"
+    return dif, dea, bar, status
+
+def calc_kdj(highs, lows, closes, n=9):
+    """Return (K, D, J, status_str)."""
+    if len(closes) < n + 3:
+        return None, None, None, "—"
+
+    k_vals = []
+    d_vals = []
+    pk, pd = 50.0, 50.0
+    for i in range(len(closes)):
+        hh = max(highs[max(0, i - n + 1):i + 1])
+        ll = min(lows[max(0, i - n + 1):i + 1])
+        rsv = 50.0 if hh == ll else (closes[i] - ll) / (hh - ll) * 100
+        pk = 2 / 3 * pk + 1 / 3 * rsv
+        pd = 2 / 3 * pd + 1 / 3 * pk
+        k_vals.append(pk)
+        d_vals.append(pd)
+
+    k, d = k_vals[-1], d_vals[-1]
+    j = 3 * k - 2 * d
+
+    if k > 80 and d > 80:
+        status = "KDJ超买"
+    elif k < 20 and d < 20:
+        status = "KDJ超卖"
+    elif k > d:
+        status = "KDJ多头"
+    else:
+        status = "KDJ空头"
+    return k, d, j, status
+
+def calc_rsi(closes, n=14):
+    """Return (RSI_value, status_str)."""
+    if len(closes) < n + 1:
+        return None, "—"
+    g = l = 0.0
+    for i in range(len(closes) - n, len(closes)):
+        ch = closes[i] - closes[i - 1]
+        g += ch if ch > 0 else 0
+        l += -ch if ch < 0 else 0
+    rsi = 100.0 if l == 0 else 100 - 100 / (1 + g / l)
+    if rsi > 80:
+        st = "RSI超买"
+    elif rsi > 60:
+        st = "RSI偏强"
+    elif rsi < 20:
+        st = "RSI超卖"
+    elif rsi < 40:
+        st = "RSI偏弱"
+    else:
+        st = "RSI中性"
+    return rsi, st
+
 # ===================== ANALYSIS =====================
 
 def analyze(code, name, stype, rt=None):
@@ -224,6 +322,12 @@ def analyze(code, name, stype, rt=None):
     h20  = max(highs[-20:])
     l20  = min(lows[-20:])
     pos20 = (price - l20) / (h20 - l20) * 100 if h20 != l20 else 50
+
+    # ---- MACD / KDJ / RSI ----
+    _, _, _, macd_st = calc_macd(closes)
+    _, _, _, kdj_st = calc_kdj(highs, lows, closes)
+    rsi_val, rsi_st = calc_rsi(closes)
+    tech_line = f"{macd_st} | {kdj_st} | RSI{rsi_val:.0f}" if rsi_val else f"{macd_st} | {kdj_st}"
 
     # ---- Signals ----
     sigs = []
@@ -320,18 +424,66 @@ def analyze(code, name, stype, rt=None):
         elif t == "death":
             score -= 6
 
+    # MACD/KDJ signals
+    if "金叉" in macd_st:
+        score += 4
+    elif "死叉" in macd_st:
+        score -= 4
+    if "多头" in macd_st:
+        score += 2
+    elif "空头" in macd_st:
+        score -= 2
+    if "超买" in kdj_st:
+        score -= 3
+    elif "超卖" in kdj_st:
+        score += 3
+    if rsi_val:
+        if rsi_val > 75:
+            score -= 3
+        elif rsi_val < 25:
+            score += 3
+
     score = max(0, min(100, score))
 
+    # ---- Suggestion with detail ----
+    detail = ""
     if score >= 72:
-        sug = ("info", "🟢 **强势** — 可持有或逢回调加仓")
+        tag, sug_base = "info", "🟢 **强势**"
+        detail = "多头趋势明确，可持有或逢回调加仓"
+        if vs20 > 15:
+            detail += "；但偏离均线较远，追高需控制仓位"
+        if "超买" in kdj_st or (rsi_val and rsi_val > 75):
+            detail += "；短线超买，注意回调"
     elif score >= 58:
-        sug = ("info", "🟡 **偏多** — 持有为主，注意上方压力")
+        tag, sug_base = "info", "🟡 **偏多**"
+        detail = "趋势偏强，持有为主"
+        if pos20 > 80:
+            detail += "；接近前高压力位，突破前不宜加仓"
+        elif "金叉" in macd_st or "金叉" in kdj_st:
+            detail += "；金叉信号出现，可轻仓试多"
     elif score >= 42:
-        sug = ("comment", "⚪ **震荡** — 建议观望，等待方向选择")
+        tag, sug_base = "comment", "⚪ **震荡**"
+        detail = "方向不明，建议观望等待"
+        if "金叉" in macd_st:
+            detail += "；MACD转好，关注能否站上MA20"
+        elif "死叉" in macd_st:
+            detail += "；MACD转弱，关注MA20支撑"
     elif score >= 28:
-        sug = ("warning", "🟡 **偏空** — 控制仓位，反弹可减仓")
+        tag, sug_base = "warning", "🟡 **偏空**"
+        detail = "趋势偏弱，控制仓位"
+        if pos20 < 20:
+            detail += "；接近支撑位，急跌可博反弹但需快进快出"
+        elif "空头" in macd_st:
+            detail += "；MACD空头运行，反弹宜减仓"
     else:
-        sug = ("warning", "🔴 **弱势** — 建议轻仓或观望")
+        tag, sug_base = "warning", "🔴 **弱势**"
+        detail = "空头趋势明显，建议轻仓或暂时离场"
+        if "超卖" in kdj_st or (rsi_val and rsi_val < 25):
+            detail += "；但短线超卖，急跌后或有技术反弹"
+        if vs20 < -20:
+            detail += "；严重超跌，左侧交易者可分批试探"
+
+    sug = (tag, f"{sug_base} — {detail}")
 
     # ---- Build Report ----
     arrow = "↑" if chg_pct > 0 else ("↓" if chg_pct < 0 else "→")
@@ -372,16 +524,34 @@ def analyze(code, name, stype, rt=None):
 
     vol_desc = f"量{vol_trend}"
 
+    # News / Events line
+    news_items = []
+    if pos20 > 92:
+        news_items.append("近20日新高，关注突破有效性")
+    elif pos20 < 8:
+        news_items.append("近20日新低，关注止跌企稳信号")
+    if abs(r5d) > 8:
+        news_items.append(f"近5日波幅{r5d:+.0f}%，异动明显")
+    if abs(chg_pct) > 3:
+        news_items.append(f"今日波动较大({chg_pct:+.1f}%)，关注消息面")
+    if up_days >= 5:
+        news_items.append(f"连涨{up_days}日，注意获利回吐")
+    if down_days >= 5:
+        news_items.append(f"连跌{down_days}日，关注超跌反弹")
+
     rpt = f"""**{name}** {code} · {stype}
 现 **{price:.3f}** {face}{chg_pct:+.2f}% {arrow} | 振{amplitude:.1f}% | {vol_desc}
-均线: {ma_status} | MA20偏离 {vs20:+.1f}%
-趋势: {trend_line}"""
+均线: {ma_status} | MA20偏离 {vs20:+.1f}% | 趋势: {trend_line}
+技术: {tech_line}"""
+
+    if news_items:
+        rpt += "\n消息: " + "；".join(news_items)
 
     if priority_sigs:
         rpt += "\n信号: " + "；".join(priority_sigs)
 
-    color, text = sug
-    rpt += f"\n<font color=\"{color}\">▶ {text} (评分{score})</font>"
+    tag, text = sug
+    rpt += f"\n<font color=\"{tag}\">▶ {text} (评分{score})</font>"
 
     return rpt
 
