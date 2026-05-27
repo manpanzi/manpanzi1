@@ -1,0 +1,30 @@
+name: A股持仓分析日报
+
+on:
+  schedule:
+    # 北京时间每个交易日 10:00 (UTC+8 = 02:00 UTC)
+    - cron: "0 2 * * 1-5"
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run analysis
+        env:
+          TZ: Asia/Shanghai
+          WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
+        run: python stock_analysis.py
