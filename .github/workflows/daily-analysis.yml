@@ -3,7 +3,8 @@ name: A股持仓分析日报
 on:
   schedule:
     # 北京时间每个交易日 10:00 (UTC+8 = 02:00 UTC)
-    - cron: "0 2 * * 1-5"
+    # 用 2 分而非 0 分避整点高峰
+    - cron: "2 2 * * 1-5"
   workflow_dispatch:  # 允许手动触发
 
 jobs:
