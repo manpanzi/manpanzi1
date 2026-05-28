@@ -6,6 +6,8 @@ on:
     # 用 2 分而非 0 分避整点高峰
     - cron: "2 2 * * 1-5"
   workflow_dispatch:  # 允许手动触发
+  repository_dispatch:  # 外部 cron 服务触发（主触发器）
+    types: [daily-analysis]
 
 jobs:
   analyze:
